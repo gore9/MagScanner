@@ -440,10 +440,12 @@ def _card_html(sym: str) -> str:
                 f'<span class="badge neutral">scanning</span></div>')
     price, rsi = st.get("entry", 0), st.get("rsi", float("nan"))
     conf, direction = st.get("confidence", 0), st.get("direction", "—")
+    tf_aligned = st.get("tf_aligned", 0)
+    align_str  = f" · {tf_aligned}/4 TF" if tf_aligned >= 3 else ""
     if conf >= MIN_CONFIDENCE_PCT:
         badge = (f'<span class="badge {"long" if direction=="LONG" else "short"}">'
                  f'{"▲" if direction=="LONG" else "▼"} {direction}</span>')
-        conf_str = f"<div class='rsi'>{conf}% conf</div>"
+        conf_str = f"<div class='rsi'>{conf}% conf{align_str}</div>"
     elif conf >= 50:
         cls  = "lean-long" if direction == "LONG" else "lean-short"
         icon = "~ long" if direction == "LONG" else "~ short"

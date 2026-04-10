@@ -3,7 +3,8 @@
 MagScanner — Real-time Mag7 + ETF scanner with popup alerts.
 
 Polls Alpaca every 5 minutes during market hours.
-Analyzes 5-min, 10-min, 15-min bars for each symbol.
+Analyzes 5-min, 10-min, 15-min, and 30-min bars for each symbol.
+Higher timeframes carry more weight — 30m confirmation is the strongest filter.
 Fires popup alerts for high-confidence long/short setups.
 
 Usage:
@@ -47,7 +48,7 @@ ALL_SYMBOLS = MAG7 + ETFS + AI_INFRA
 SCAN_INTERVAL_SEC  = 300      # 5 minutes between full scans
 MIN_CONFIDENCE_PCT = 62       # minimum confidence % to fire popup
 ALERT_COOLDOWN_SEC = 1800     # 30 min: won't re-alert same symbol+direction
-DAYS_HISTORY       = 4        # days of 5-min bars to fetch (indicator warmup)
+DAYS_HISTORY       = 6        # days of 5-min bars to fetch; 6d ≈ 65 30-min bars (EMA50 warmup)
 MIN_BARS_NEEDED    = 55       # need at least this many 5-min bars to analyze
 
 ET = pytz.timezone("America/New_York")
@@ -262,26 +263,52 @@ def _score_symbol(df5: pd.DataFrame) -> Dict:
     """
     Core scoring — always runs, returns full result dict regardless of confidence.
     Used by both analyze_symbol (signal) and get_symbol_status (card update).
+
+    Timeframe weights (higher TF = more influence on final score):
+        5m  × 1.0  — short-term momentum / entry trigger
+        10m × 1.3  — near-term trend confirmation
+        15m × 1.6  — intraday structure
+        30m × 2.0  — broad intraday bias (strongest filter, reduces variability)
+
+    Alignment bonuses:
+        All 4 aligned → +4.5  (very high-conviction setup)
+        3 of 4 aligned → +2.0 (good confluence, 30m must agree)
+
+    Confidence formula recalibrated for 4-TF weight sum (5.9 vs old 3.9):
+        confidence = min(96, int(42 + raw_score * 1.8))
     """
     df10 = resample_bars(df5.copy(), 10)
     df15 = resample_bars(df5.copy(), 15)
+    df30 = resample_bars(df5.copy(), 30)
 
     b5,  br5,  blbl5,  brlbl5  = score_timeframe(df5,  "5m")
     b10, br10, blbl10, brlbl10 = score_timeframe(df10, "10m")
     b15, br15, blbl15, brlbl15 = score_timeframe(df15, "15m")
+    b30, br30, blbl30, brlbl30 = score_timeframe(df30, "30m")
 
-    bull_total = b5 * 1.0 + b10 * 1.3 + b15 * 1.6
-    bear_total = br5 * 1.0 + br10 * 1.3 + br15 * 1.6
+    bull_total = b5 * 1.0 + b10 * 1.3 + b15 * 1.6 + b30 * 2.0
+    bear_total = br5 * 1.0 + br10 * 1.3 + br15 * 1.6 + br30 * 2.0
 
-    bull_labels_all = blbl5  + blbl10  + blbl15
-    bear_labels_all = brlbl5 + brlbl10 + brlbl15
+    bull_labels_all = blbl5  + blbl10  + blbl15  + blbl30
+    bear_labels_all = brlbl5 + brlbl10 + brlbl15 + brlbl30
 
-    if b5 > br5 and b10 > br10 and b15 > br15:
-        bull_total += 3.5
-        bull_labels_all.insert(0, "All 3 timeframes aligned BULLISH")
-    if br5 > b5 and br10 > b10 and br15 > b15:
-        bear_total += 3.5
-        bear_labels_all.insert(0, "All 3 timeframes aligned BEARISH")
+    # Alignment bonus — rewards convergence across timeframes
+    bull_aligned = sum([b5 > br5, b10 > br10, b15 > br15, b30 > br30])
+    bear_aligned = sum([br5 > b5, br10 > b10, br15 > b15, br30 > b30])
+
+    if bull_aligned == 4:
+        bull_total += 4.5
+        bull_labels_all.insert(0, "All 4 timeframes aligned BULLISH")
+    elif bull_aligned == 3:
+        bull_total += 2.0
+        bull_labels_all.insert(0, "3/4 timeframes aligned BULLISH")
+
+    if bear_aligned == 4:
+        bear_total += 4.5
+        bear_labels_all.insert(0, "All 4 timeframes aligned BEARISH")
+    elif bear_aligned == 3:
+        bear_total += 2.0
+        bear_labels_all.insert(0, "3/4 timeframes aligned BEARISH")
 
     if bull_total >= bear_total:
         direction  = "LONG"
@@ -300,7 +327,9 @@ def _score_symbol(df5: pd.DataFrame) -> Dict:
             seen.add(key)
             signal_labels.append(lbl)
 
-    confidence = min(96, int(42 + raw_score * 2.7))
+    # Recalibrated multiplier: old weight-sum 3.9 → new 5.9, scale = 3.9/5.9 ≈ 0.66
+    # Old: 42 + score * 2.7  →  New: 42 + score * 1.8
+    confidence = min(96, int(42 + raw_score * 1.8))
 
     df5e     = compute_all(df5)
     last     = df5e.iloc[-1]
@@ -316,7 +345,8 @@ def _score_symbol(df5: pd.DataFrame) -> Dict:
         "vwap":       vwap_now,
         "bull_score": round(bull_total, 1),
         "bear_score": round(bear_total, 1),
-        "signals":    signal_labels[:6] or ["Composite signal across timeframes"],
+        "tf_aligned": bull_aligned if bull_total >= bear_total else bear_aligned,
+        "signals":    signal_labels[:8] or ["Composite signal across timeframes"],
     }
 
 
