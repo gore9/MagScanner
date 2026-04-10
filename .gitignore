@@ -1,0 +1,27 @@
+# Environment & secrets
+.env
+*.env
+
+# Python virtual environments
+.venv/
+.venv2/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Runtime data (auto-generated, contains personal trade history)
+signals.json
+positions.json
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Logs
+*.log
